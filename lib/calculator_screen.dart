@@ -1,49 +1,32 @@
-// calculator_screen.dart
+//calculator_screen.dart
 import 'package:flutter/material.dart';
-import 'button_values.dart';
-import 'converter_screen.dart';
+import 'button_values.dart'; // Assuming Btn class is defined here
+import 'history_database.dart'; // Assuming HistoryDatabase class is defined here
+
 class CalculatorScreen extends StatefulWidget {
-const CalculatorScreen({super.key});
+  const CalculatorScreen({Key? key}) : super(key: key);
 
   @override
   State<CalculatorScreen> createState() => _CalculatorScreenState();
 }
 
-Color getBtnColor(String value) {
-  if ([Btn.del, Btn.clr].contains(value)) {
-    return Colors.blueGrey;
-  } else if ([
-    Btn.per,
-    Btn.multiply,
-    Btn.add,
-    Btn.subtract,
-    Btn.divide,
-    Btn.calculate,
-  ].contains(value)) {
-    return Colors.orange;
-  } else if ([
-    Btn.n0,
-    Btn.n1,
-    Btn.n2,
-    Btn.n3,
-    Btn.n4,
-    Btn.n5,
-    Btn.n6,
-    Btn.n7,
-    Btn.n8,
-    Btn.n9,
-    Btn.dot,
-  ].contains(value)) {
-    return Colors.black87;
-  } else {
-    return Colors.black; // Default color for unknown values
+class ExpressionElement {
+  final String value;
+  final OperatorPriority priority;
+
+  ExpressionElement(this.value, this.priority);
+}
+
+enum OperatorPriority { LOW, MEDIUM, HIGH }
+
+extension OperatorPriorityExtension on OperatorPriority {
+  bool operator >=(OperatorPriority other) {
+    return this.index >= other.index;
   }
 }
 
 class _CalculatorScreenState extends State<CalculatorScreen> {
-  String number1 = "";
-  String operand = "";
-  String number2 = "";
+  List<ExpressionElement> expression = [];
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +39,12 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
             icon: Icon(Icons.swap_horizontal_circle),
             onPressed: () {
               Navigator.pushNamed(context, '/converter');
+            },
+          ),
+          IconButton(
+            icon: Icon(Icons.history),
+            onPressed: () {
+              showHistory();
             },
           ),
         ],
@@ -71,9 +60,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                   alignment: Alignment.bottomRight,
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    "$number1$operand$number2".isEmpty
-                        ? "0"
-                        : "$number1$operand$number2",
+                    expression.isEmpty ? "0" : expressionToString(expression),
                     style: const TextStyle(
                       fontSize: 48,
                       fontWeight: FontWeight.bold,
@@ -102,7 +89,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     );
   }
 
-  Widget buildButton(value) {
+  Widget buildButton(String value) {
     return Padding(
       padding: const EdgeInsets.all(4.0),
       child: Material(
@@ -115,7 +102,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
           borderRadius: BorderRadius.circular(100),
         ),
         child: InkWell(
-          onTap: () => onBtnTap(value.toString()),
+          onTap: () => onBtnTap(value),
           child: Center(
             child: Text(
               value.toString(),
@@ -152,101 +139,251 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
   }
 
   void calculate() {
-    if (number1.isEmpty) return;
-    if (operand.isEmpty) return;
-    if (number2.isEmpty) return;
-    // Save history to SQLite database
+    try {
+      if (expression.isEmpty || expression.last.value == Btn.dot) return;
+
+      double result = evaluateExpression(expression);
+
+      String equation = expressionToString(expression);
+      String historyEntry = "$equation = $result";
+      HistoryDatabase.insertHistory(historyEntry);
+
+      setState(() {
+        expression.clear();
+        expression.add(ExpressionElement(result.toString(), OperatorPriority.LOW));
+      });
+    } catch (e) {
+      showErrorDialog(e.toString());
+    }
+  }
 
 
-    final double num1 = double.parse(number1);
-    final double num2 = double.parse(number2);
+  double evaluateExpression(List<ExpressionElement> expression) {
+    List<double> numbers = [];
+    List<String> operators = [];
 
-    var result = 0.0;
-    switch (operand) {
-      case Btn.add:
-        result = num1 + num2;
-        break;
-      case Btn.subtract:
-        result = num1 - num2;
-        break;
-      case Btn.multiply:
-        result = num1 * num2;
-        break;
-      case Btn.divide:
-        result = num1 / num2;
-        break;
-      default:
+    for (var element in expression) {
+      if (num.tryParse(element.value) != null) {
+        numbers.add(double.parse(element.value));
+      } else if (element.value == Btn.openParenthesis) {
+        operators.add(element.value);
+      } else if (element.value == Btn.closeParenthesis) {
+        while (operators.isNotEmpty && operators.last != Btn.openParenthesis) {
+          applyOperator(numbers, operators);
+        }
+        if (operators.isEmpty) {
+          throw ArgumentError('Invalid expression: Mismatched parentheses');
+        }
+        operators.removeLast(); // Remove open parenthesis
+      } else {
+        while (operators.isNotEmpty && hasPrecedence(operators.last, element.value)) {
+          applyOperator(numbers, operators);
+        }
+        operators.add(element.value);
+      }
     }
 
-    setState(() {
-      number1 = result.toStringAsPrecision(3);
-
-      if (number1.endsWith(".0")) {
-        number1 = number1.substring(0, number1.length - 2);
+    while (operators.isNotEmpty) {
+      if (operators.last == Btn.openParenthesis || operators.last == Btn.closeParenthesis) {
+        throw ArgumentError('Invalid expression: Mismatched parentheses');
       }
+      applyOperator(numbers, operators);
+    }
 
-      operand = "";
-      number2 = "";
-    });
+    if (numbers.length != 1) {
+      throw ArgumentError('Invalid expression: Mismatched operands');
+    }
+
+    return numbers.first;
+  }
+
+  bool hasPrecedence(String op1, String op2) {
+    if (op2 == Btn.openParenthesis || op2 == Btn.closeParenthesis) {
+      return false;
+    }
+    if ((op1 == Btn.multiply || op1 == Btn.divide) && (op2 == Btn.add || op2 == Btn.subtract)) {
+      return false;
+    }
+    return true;
+  }
+
+  void applyOperator(List<double> numbers, List<String> operators) {
+    if (operators.isEmpty || operators.last == Btn.openParenthesis) {
+      return;
+    }
+    double secondOperand = numbers.removeLast();
+    double firstOperand = numbers.removeLast();
+    String operator = operators.removeLast();
+
+    double result = performOperation(firstOperand, operator, secondOperand);
+    numbers.add(result);
+  }
+
+  double performOperation(double firstOperand, String operator, double secondOperand) {
+    switch (operator) {
+      case Btn.add:
+        return firstOperand + secondOperand;
+      case Btn.subtract:
+        return firstOperand - secondOperand;
+      case Btn.multiply:
+        return firstOperand * secondOperand;
+      case Btn.divide:
+        if (secondOperand == 0) {
+          throw ArgumentError('Division by zero is not allowed');
+        }
+        return firstOperand / secondOperand;
+      default:
+        throw ArgumentError('Unknown operator: $operator');
+    }
   }
 
   void convertToPercentage() {
-    if (number1.isNotEmpty && operand.isNotEmpty && number2.isNotEmpty) {
-      calculate();
-    }
-
-    if (operand.isNotEmpty) {
-      return;
-    }
-
-    final number = double.parse(number1);
-    setState(() {
-      number1 = "${(number / 100)}";
-      operand = "";
-      number2 = "";
-    });
+    // Placeholder implementation for converting number to percentage
   }
 
   void clearAll() {
     setState(() {
-      number1 = "";
-      operand = "";
-      number2 = "";
+      expression.clear();
     });
   }
 
   void delete() {
-    if (number2.isNotEmpty) {
-      number2 = number2.substring(0, number2.length - 1);
-    } else if (operand.isNotEmpty) {
-      operand = "";
-    } else if (number1.isNotEmpty) {
-      number1 = number1.substring(0, number1.length - 1);
+    if (expression.isNotEmpty) {
+      expression.removeLast();
     }
-
-    setState(() {});
   }
 
   void appendValue(String value) {
-    if (value != Btn.dot && int.tryParse(value) == null) {
-      if (operand.isNotEmpty && number2.isNotEmpty) {
-        calculate();
+    // Check if the value is a digit or a dot
+    if (value == Btn.dot || (value.compareTo('0') >= 0 && value.compareTo('9') <= 0)) {
+      // If the expression is empty or the last element is an operator, add the new value as a new operand
+      if (expression.isEmpty || isOperator(expression.last.value) || expression.last.value == Btn.openParenthesis) {
+        expression.add(ExpressionElement(value, OperatorPriority.LOW));
+      } else {
+        // Otherwise, concatenate the new value to the last operand
+        final lastElement = expression.removeLast();
+        final newValue = lastElement.value + value;
+        expression.add(ExpressionElement(newValue, lastElement.priority));
       }
-      operand = value;
-    } else if (number1.isEmpty || operand.isEmpty) {
-      if (value == Btn.dot && number1.contains(Btn.dot)) return;
-      if (value == Btn.dot && (number1.isEmpty || number1 == Btn.n0)) {
-        value = "0.";
-      }
-      number1 += value;
-    } else if (number2.isEmpty || operand.isNotEmpty) {
-      if (value == Btn.dot && number2.contains(Btn.dot)) return;
-      if (value == Btn.dot && (number2.isEmpty || number2 == Btn.n0)) {
-        value = "0.";
-      }
-      number2 += value;
+    } else {
+      // If the value is an operator or percentage, add it as a separate element
+      expression.add(ExpressionElement(value, operatorPriority(value)));
     }
+  }
 
-    setState(() {});
+  bool isOperator(String value) {
+    return value == Btn.add ||
+        value == Btn.subtract ||
+        value == Btn.multiply ||
+        value == Btn.divide;
+  }
+
+  OperatorPriority operatorPriority(String operator) {
+    switch (operator) {
+      case Btn.add:
+      case Btn.subtract:
+        return OperatorPriority.LOW;
+      case Btn.multiply:
+      case Btn.divide:
+        return OperatorPriority.MEDIUM;
+      default:
+        return OperatorPriority.HIGH;
+    }
+  }
+
+
+  String expressionToString(List<ExpressionElement> expression) {
+    String result = '';
+    for (var element in expression) {
+      result += element.value;
+    }
+    return result.trim();
+  }
+
+  Color getBtnColor(String value) {
+    if ([Btn.del, Btn.clr].contains(value)) {
+      return Colors.blueGrey;
+    } else if ([
+      Btn.per,
+      Btn.multiply,
+      Btn.add,
+      Btn.subtract,
+      Btn.divide,
+      Btn.calculate,
+      Btn.openParenthesis,
+      Btn.closeParenthesis,
+    ].contains(value)) {
+      return Colors.orange;
+    } else if ([
+      Btn.n0,
+      Btn.n1,
+      Btn.n2,
+      Btn.n3,
+      Btn.n4,
+      Btn.n5,
+      Btn.n6,
+      Btn.n7,
+      Btn.n8,
+      Btn.n9,
+      Btn.dot,
+    ].contains(value)) {
+      return Colors.black87;
+    } else {
+      return Colors.black; // Default color for unknown values
+    }
+  }
+
+  Future<void> showHistory() async {
+    final List<Map<String, dynamic>> history = await HistoryDatabase.getHistory();
+
+    // Show history in a dialog
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('History'),
+          content: Container(
+            width: double.maxFinite,
+            child: ListView.builder(
+              itemCount: history.length,
+              itemBuilder: (context, index) {
+                return ListTile(
+                  title: Text('Calculation: ${history[index][HistoryDatabase.columnCalculation]}'),
+                  subtitle: Text('Time: ${history[index][HistoryDatabase.columnTime]}'),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Error'),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

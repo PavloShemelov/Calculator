@@ -1,4 +1,3 @@
-// main.dart
 import 'package:flutter/material.dart';
 import 'calculator_screen.dart';
 import 'converter_screen.dart';

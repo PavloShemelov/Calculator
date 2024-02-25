@@ -1,3 +1,4 @@
+// button_values.dart
 class Btn {
   static const String del = "D";
   static const String clr = "C";
@@ -8,6 +9,8 @@ class Btn {
   static const String subtract = "-";
   static const String calculate = "=";
   static const String dot = ".";
+  static const String openParenthesis = "(";
+  static const String closeParenthesis = ")";
 
   static const String n0 = "0";
   static const String n1 = "1";
