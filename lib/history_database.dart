@@ -2,6 +2,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class HistoryDatabase {
   static const String tableName = 'history';
@@ -35,6 +36,15 @@ class HistoryDatabase {
         columnTime: DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now()),
       },
     );
+
+    await _addToFirestore(calculation);
+  }
+
+  static Future<void> _addToFirestore(String calculation) async {
+    await FirebaseFirestore.instance.collection(tableName).add({
+      columnCalculation: calculation,
+      columnTime: DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now()),
+    });
   }
 
   static Future<List<Map<String, dynamic>>> getHistory() async {
